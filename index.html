@@ -655,3 +655,60 @@ requestAnimationFrame(render);
 </script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Display 1001</title>
+
+<!-- Bristol font -->
+<link href="https://fonts.googleapis.com/css2?family=Bristol&display=swap" rel="stylesheet">
+
+<style>
+body {
+  margin: 0;
+  background: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+#numDisplay {
+  font-family: 'Bristol', sans-serif;
+  font-size: 72px;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(255,255,255,0.6);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+</style>
+</head>
+<body>
+
+<div id="numDisplay">1001</div>
+
+<script>
+// Function to show 1001 for a certain duration
+function show1001(duration=2000){
+  const el = document.getElementById('numDisplay');
+  el.style.opacity = 1;
+  setTimeout(() => { el.style.opacity = 0; }, duration);
+}
+
+// Example: show 1001 when a "phrase" occurs
+let phraseCount = 0;
+function nextPhrase(){
+  phraseCount++;
+  if(phraseCount === 3){ // triggers on phrase 3
+    show1001();
+  }
+}
+
+// Simulate phrases every 2 seconds for demo
+setInterval(nextPhrase, 2000);
+</script>
+
+</body>
+</html>
