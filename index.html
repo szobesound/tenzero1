@@ -33,7 +33,6 @@ canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-
 @media(hover:hover){#bpmControls{display:none;}}
 </style>
 </head>
-</style>
 <body>
 <canvas id="c"></canvas>
 <div id="hud">
@@ -515,65 +514,39 @@ document.querySelectorAll('.ctrl').forEach(el => {
 
 // ── Audio ───────────────────────────────────────────────────────
 document.getElementById('fileInput').addEventListener('change', async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    // Ensure AudioContext exists
-    if (!actx) {
-        actx = new (window.AudioContext || window.webkitAudioContext)();
-        analyser = actx.createAnalyser();
-        analyser.fftSize = 2048;
-        analyser.smoothingTimeConstant = 0.8;
-        analyser.connect(actx.destination);
-        fftData = new Uint8Array(analyser.frequencyBinCount);
-        waveData = new Uint8Array(analyser.fftSize);
-    }
-
-    // Read the file as ArrayBuffer
-    const arrayBuffer = await file.arrayBuffer();
-
-    // Decode audio (works for MP3, WAV, AAC, etc.)
-    try {
-        audioBuffer = await actx.decodeAudioData(arrayBuffer);
-        audioLoaded = true;
-        document.getElementById('fileName').textContent = file.name;
-        document.getElementById('playPauseBtn').style.display = '';
-        document.getElementById('playPauseBtn').textContent = 'PLAY';
-        audioOffset = 0; // Reset offset when loading new file
-    } catch(err) {
-        console.error('Error decoding audio:', err);
-        alert('Failed to load audio. Make sure it is a valid MP3/WAV file.');
-    }
+  const file = e.target.files[0]; if (!file) return;
+  if (!actx) {
+    actx = new (window.AudioContext||window.webkitAudioContext)();
+    analyser = actx.createAnalyser();
+    analyser.fftSize=2048; analyser.smoothingTimeConstant=0.80;
+    analyser.connect(actx.destination);
+    fftData=new Uint8Array(analyser.frequencyBinCount);
+    waveData=new Uint8Array(analyser.fftSize);
+  }
+  const buf = await file.arrayBuffer();
+  audioBuffer = await actx.decodeAudioData(buf);
+  audioLoaded = true;
+  document.getElementById('fileName').textContent = file.name;
+  document.getElementById('playPauseBtn').style.display='';
+  document.getElementById('playPauseBtn').textContent='PLAY';
 });
 
-// Play / Pause toggle
-let audioSrc = null, audioStart = 0, audioOffset = 0, audioPlaying = false;
-
+let audioOffset=0, audioStart=0;
 function toggleAudio() {
-    if (!audioLoaded) return;
-
-    // Resume context if suspended (required by Chrome)
-    if (actx.state === 'suspended') actx.resume();
-
-    if (audioPlaying) {
-        audioOffset += actx.currentTime - audioStart;
-        if(audioSrc) audioSrc.stop();
-        audioPlaying = false;
-        document.getElementById('playPauseBtn').textContent = 'PLAY';
-    } else {
-        audioSrc = actx.createBufferSource();
-        audioSrc.buffer = audioBuffer;
-        audioSrc.loop = true;
-        audioSrc.connect(analyser);
-        audioSrc.start(0, audioOffset % audioBuffer.duration);
-        audioStart = actx.currentTime;
-        audioPlaying = true;
-        document.getElementById('playPauseBtn').textContent = 'PAUSE';
-
-        // Stop audio when file changes or page unloads
-        audioSrc.onended = () => { audioPlaying = false; document.getElementById('playPauseBtn').textContent = 'PLAY'; };
-    }
-}  }
+  if (!audioLoaded) return;
+  if (actx.state==='suspended') actx.resume();
+  if (audioPlaying) {
+    audioOffset += actx.currentTime-audioStart;
+    audioSrc.stop(); audioPlaying=false;
+    document.getElementById('playPauseBtn').textContent='PLAY';
+  } else {
+    audioSrc=actx.createBufferSource();
+    audioSrc.buffer=audioBuffer; audioSrc.loop=true;
+    audioSrc.connect(analyser);
+    audioSrc.start(0,audioOffset%audioBuffer.duration);
+    audioStart=actx.currentTime; audioPlaying=true;
+    document.getElementById('playPauseBtn').textContent='PAUSE';
+  }
 }
 
 // ── Keyboard ────────────────────────────────────────────────────
@@ -656,4 +629,3 @@ requestAnimationFrame(render);
 </script>
 </body>
 </html>
-
