@@ -49,19 +49,21 @@ canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-
   <div id="fileName">SIM BPM</div>
 </div>
 <div id="ui">
-  <div class="ctrl active" data-mode="0">1 TEN ZERO ONE</div>
+  <div class="ctrl active" data-mode="0">1 TUNNEL</div>
   <div class="ctrl" data-mode="1">2 GRID</div>
   <div class="ctrl" data-mode="2">3 MANDALA</div>
   <div class="ctrl" data-mode="3">4 HEX</div>
   <div class="ctrl" data-mode="4">5 MIRROR</div>
   <div class="ctrl" data-mode="5">6 STROBE</div>
+  <div class="ctrl" data-mode="6">7 COSMOS</div>
+  <div class="ctrl" data-mode="7">8 AURA</div>
 </div>
 <div id="bpmControls">
   <div class="bpmBtn" id="bpmUp">+</div>
   <div class="bpmBtn" id="bpmDown">−</div>
 </div>
 <div id="swipeHint">SWIPE ← → TO CHANGE MODE</div>
-<div id="keys">1–6 mode<br>←→ bpm<br>space pause<br>a auto-cycle</div>
+<div id="keys">1–8 mode<br>←→ bpm<br>space pause<br>a auto-cycle</div>
 
 <script>
 const cv = document.getElementById('c');
@@ -103,8 +105,8 @@ let audioLoaded = false, audioPlaying = false;
 let fftData, waveData;
 
 let mode = 0;
-const MODE_NAMES = ['TUNNEL','GRID','MANDALA','HEX','MIRROR','STROBE GRID'];
-const N_MODES = 6;
+const MODE_NAMES = ['TUNNEL','GRID','MANDALA','HEX','MIRROR','STROBE GRID','COSMOS','AURA'];
+const N_MODES = 8;
 let tick = 0;
 
 let smoothBass = 0, smoothMid = 0, smoothHigh = 0;
@@ -450,11 +452,722 @@ function modeStrobeGrid() {
   }
 }
 
-// ── Background & Vignette ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// MODE 6 — COSMOS
+// Palette: soft light blues, cyan, pale turquoise — unified across
+// every layer. Motion: everything flows like waves in a cosmic ocean.
+// Hues locked to 185–220° (cyan → sky blue → icy blue).
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Palette helpers — all cosmos colours stay in the icy-blue range ──
+// cH(t) : interpolates hue smoothly across 185–220 based on t (0–1)
+// cAlpha : build an hsla string, hue always in cyan/blue range
+function cH(t) { return 185 + t * 35; }           // 185 cyan → 220 sky blue
+function cBlue(h, s, l, a) { return `hsla(${h},${s}%,${l}%,${a})`; }
+// Slight hue breathe per cosmos time — stays inside the icy range
+function breatheHue(base, t) { return base + Math.sin(t * 0.11) * 12; }
+
+// ── Seeded star field ─────────────────────────────────────────────
+const STAR_COUNT = 320;
+const stars = [];
+(function seedStars() {
+  for (let i = 0; i < STAR_COUNT; i++) {
+    // Star hue: 185–215 (all icy blue/cyan/turquoise, never warm)
+    const starHue = 185 + Math.random() * 30;
+    stars.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: Math.pow(Math.random(), 2.2) * 2.6 + 0.3,
+      twinkle: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.015 + Math.random() * 0.038,
+      hue: starHue,
+      layer: Math.floor(Math.random() * 3),          // 0=far/dim, 1=mid, 2=near/bright
+      driftAngle: Math.random() * Math.PI * 2        // ocean current direction
+    });
+  }
+})();
+
+// ── Seeded nebula nodes — 9 breathing blobs ───────────────────────
+// Each blob has its own hue locked between 185–215
+const NEBULA_NODES = 9;
+const nebulaNodes = [];
+(function seedNebula() {
+  for (let i = 0; i < NEBULA_NODES; i++) {
+    const angle = (Math.PI * 2 / NEBULA_NODES) * i + (i % 2 === 0 ? 0.3 : -0.2);
+    const dist  = 160 + (i / NEBULA_NODES) * 360;
+    // Hues cycle gently: cyan (185), turquoise (175→clamp to 185), icy blue (210)
+    const blobHue = 185 + (i / NEBULA_NODES) * 28;
+    nebulaNodes.push({
+      ox: CX + Math.cos(angle) * dist,
+      oy: CY + Math.sin(angle) * dist,
+      baseR: 130 + Math.random() * 200,
+      hue: blobHue,
+      phase: (i / NEBULA_NODES) * Math.PI * 2,     // staggered breathing
+      driftFreq: 0.031 + i * 0.007,                 // unique drift frequency
+      breathFreq: 0.018 + i * 0.004                 // unique breath frequency
+    });
+  }
+})();
+
+// ── Wave field constants ──────────────────────────────────────────
+const WAVE_LINES  = 48;
+const WAVE_POINTS = 90;   // more points = smoother curves
+
+// ── Cosmos state ──────────────────────────────────────────────────
+let cosmosHue = 200;       // master hue — stays 185–220
+let cosmosTime = 0;        // dedicated slow clock
+// Persistent expanding rings for beat shockwaves (up to 4 live at once)
+const cosmosRings = [];
+
+function modeCosmos() {
+  // Advance slow clock — gentle drift, slightly faster on bass hits
+  cosmosTime += 0.006 + smoothBass * 0.004;
+  // Master hue breathes gently inside the icy range — never leaves it
+  cosmosHue = 198 + Math.sin(cosmosTime * 0.09) * 13;   // 185–211
+
+  // ── 1. NEBULA CLOUDS — 9 breathing radial blobs ───────────────
+  // Each blob drifts in a slow, organic Lissajous path.
+  // Bass expands them; they pulse with a staggered breathing rhythm.
+  for (const n of nebulaNodes) {
+    // Organic drift: two sine components at irrational ratio
+    const nx = n.ox + Math.sin(cosmosTime * n.driftFreq * 1.00 + n.phase) * 55
+                    + Math.sin(cosmosTime * n.driftFreq * 1.61 + n.phase * 0.7) * 22;
+    const ny = n.oy + Math.cos(cosmosTime * n.driftFreq * 0.83 + n.phase) * 36
+                    + Math.cos(cosmosTime * n.driftFreq * 1.27 + n.phase * 1.3) * 18;
+
+    // Breathing: slow sine, scaled by bass
+    const breathe = 1.0
+      + Math.sin(cosmosTime * n.breathFreq * 60 + n.phase) * 0.10
+      + smoothBass * 0.35;
+    const r = n.baseR * breathe;
+
+    // Inner hue = blob's own cyan/blue, outer shifts ±8° for depth
+    const h0 = n.hue;
+    const h1 = n.hue + 8 > 220 ? n.hue - 8 : n.hue + 8;
+
+    // Alpha breathes too — softer on edges, brighter on bass
+    const baseAlpha = 0.048 + smoothBass * 0.022;
+    const g = ctx.createRadialGradient(nx, ny, 0, nx, ny, r);
+    g.addColorStop(0,    cBlue(h0, 80, 72, baseAlpha * 1.20));
+    g.addColorStop(0.30, cBlue(h1, 75, 58, baseAlpha * 0.80));
+    g.addColorStop(0.62, cBlue(h0, 65, 40, baseAlpha * 0.38));
+    g.addColorStop(0.85, cBlue(h1, 55, 22, baseAlpha * 0.12));
+    g.addColorStop(1,    cBlue(h0, 50, 10, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ── 2. GRAVITY WAVE FIELD — 48 sine-stacked lines ─────────────
+  // Rows spread across the full canvas height. Each row is an
+  // independent sine sum with slightly different frequencies and
+  // phases, producing smooth wave-interference ripples.
+  // Colour: rows near center = brightest cyan; edges = dimmer blue.
+  ctx.save();
+  for (let row = 0; row < WAVE_LINES; row++) {
+    const t  = row / (WAVE_LINES - 1);                    // 0 top → 1 bottom
+    const cy = H * 0.04 + t * H * 0.92;                  // spread with slim margins
+
+    const distFromCenter = Math.abs(t - 0.5) * 2;         // 0=center, 1=edge
+    const centerBoost    = 1 - distFromCenter * 0.65;
+
+    // Row hue: center rows = cyan (185), edges drift toward icy blue (215)
+    const rowHue = 185 + distFromCenter * 30;
+    const rowSat = 88 - distFromCenter * 18;
+    const rowLit = 62 + centerBoost * 18;
+    const rowAlpha = centerBoost * (0.10 + smoothBass * 0.16 + smoothBeat * 0.10);
+
+    // Each row gets 3 overlapping sine waves at incommensurable frequencies
+    const phOff = row * 0.19;
+    const f1 = 1.6 + t * 1.8;
+    const f2 = 0.8 + (1 - t) * 1.4;
+    const f3 = 2.4 + t * 0.9;
+    const a1 = 22 + smoothBass * 48 + centerBoost * 16;
+    const a2 = 12 + smoothMid  * 24;
+    const a3 =  6 + smoothHigh * 14;
+    // Slow global drift — all waves move as one ocean
+    const drift = Math.sin(cosmosTime * 0.28 + row * 0.12) * 10;
+
+    ctx.beginPath();
+    for (let p = 0; p <= WAVE_POINTS; p++) {
+      const px = (p / WAVE_POINTS) * W;
+      const nx = (p / WAVE_POINTS) * 2 - 1;              // -1 → +1
+      const w1 = Math.sin(nx * Math.PI * f1 + cosmosTime * 1.30 + phOff) * a1;
+      const w2 = Math.sin(nx * Math.PI * f2 - cosmosTime * 0.75 + phOff * 0.6) * a2;
+      const w3 = Math.sin(nx * Math.PI * f3 + cosmosTime * 0.55 + phOff * 1.4) * a3;
+      const py = cy + w1 + w2 + w3 + drift;
+      p === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = cBlue(rowHue, rowSat, rowLit, rowAlpha);
+    ctx.lineWidth   = 0.5 + centerBoost * 1.4;
+    ctx.stroke();
+
+    // Every 8th row: fill the band between this and the next
+    // → gives the wave field a soft translucent body, like deep water
+    if (row % 8 === 0 && row + 8 < WAVE_LINES) {
+      const t2   = (row + 8) / (WAVE_LINES - 1);
+      const cy2  = H * 0.04 + t2 * H * 0.92;
+      const phOff2 = (row + 8) * 0.19;
+      const f1b  = 1.6 + t2 * 1.8, f2b = 0.8 + (1 - t2) * 1.4, f3b = 2.4 + t2 * 0.9;
+      const a1b  = 22 + smoothBass * 48, a2b = 12 + smoothMid * 24, a3b = 6 + smoothHigh * 14;
+      const drift2 = Math.sin(cosmosTime * 0.28 + (row + 8) * 0.12) * 10;
+
+      ctx.beginPath();
+      // Forward pass — upper edge
+      for (let p = 0; p <= WAVE_POINTS; p++) {
+        const px = (p / WAVE_POINTS) * W, nx = (p / WAVE_POINTS) * 2 - 1;
+        const py = cy
+          + Math.sin(nx * Math.PI * f1 + cosmosTime * 1.30 + phOff) * a1
+          + Math.sin(nx * Math.PI * f2 - cosmosTime * 0.75 + phOff * 0.6) * a2
+          + Math.sin(nx * Math.PI * f3 + cosmosTime * 0.55 + phOff * 1.4) * a3 + drift;
+        p === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+      // Reverse pass — lower edge
+      for (let p = WAVE_POINTS; p >= 0; p--) {
+        const px = (p / WAVE_POINTS) * W, nx = (p / WAVE_POINTS) * 2 - 1;
+        const py = cy2
+          + Math.sin(nx * Math.PI * f1b + cosmosTime * 1.30 + phOff2) * a1b
+          + Math.sin(nx * Math.PI * f2b - cosmosTime * 0.75 + phOff2 * 0.6) * a2b
+          + Math.sin(nx * Math.PI * f3b + cosmosTime * 0.55 + phOff2 * 1.4) * a3b + drift2;
+        ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      const bandH = 185 + (Math.abs(t - 0.5)) * 30;
+      ctx.fillStyle = cBlue(bandH, 75, 45, 0.012 + smoothBass * 0.010);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  // ── 3. STAR FIELD — 320 stars, 3 parallax layers ──────────────
+  // Stars drift like ocean currents — each has a gentle circular drift.
+  // All stars icy-blue/cyan. Beat causes large stars to flare with a
+  // soft halo and brief size pop.
+  for (const s of stars) {
+    // Ocean-current drift: slow circular motion, speed by layer
+    const layerSpeed = [0.018, 0.036, 0.058][s.layer];
+    const driftR     = [4, 10, 20][s.layer];
+    const sx = (s.x + Math.cos(cosmosTime * layerSpeed + s.driftAngle) * driftR + W) % W;
+    const sy = (s.y + Math.sin(cosmosTime * layerSpeed * 0.7 + s.driftAngle) * driftR * 0.6 + H) % H;
+
+    // Twinkle: smooth sine, independent per star
+    const twinkle  = 0.35 + 0.65 * Math.abs(Math.sin(cosmosTime * s.twinkleSpeed * 60 + s.twinkle));
+    const layerAlpha = [0.45, 0.72, 1.0][s.layer];
+    const alpha      = twinkle * layerAlpha * (0.55 + smoothHigh * 0.45);
+
+    // Beat flare: only large near-layer stars flare
+    const doFlare = beatFlash > 0.38 && s.r > 1.4 && s.layer === 2;
+    const flareR  = doFlare ? s.r * (1 + beatFlash * 2.8) : s.r;
+
+    if (doFlare) {
+      // Soft icy halo — two concentric radial gradients for depth
+      const gH = ctx.createRadialGradient(sx, sy, 0, sx, sy, flareR * 5);
+      gH.addColorStop(0,   cBlue(s.hue, 90, 95, alpha * 0.55));
+      gH.addColorStop(0.4, cBlue(s.hue, 85, 75, alpha * 0.18));
+      gH.addColorStop(1,   cBlue(s.hue, 70, 55, 0));
+      ctx.fillStyle = gH;
+      ctx.beginPath(); ctx.arc(sx, sy, flareR * 5, 0, Math.PI * 2); ctx.fill();
+
+      // Cross-hair diffraction spike (4 short lines) — hallmark of bright stars
+      const spikeLen = flareR * 7 * beatFlash;
+      const spikeA   = alpha * beatFlash * 0.5;
+      for (let sp = 0; sp < 4; sp++) {
+        const sa = (Math.PI / 4) * sp;
+        ctx.beginPath();
+        ctx.moveTo(sx + Math.cos(sa) * flareR, sy + Math.sin(sa) * flareR);
+        ctx.lineTo(sx + Math.cos(sa) * spikeLen, sy + Math.sin(sa) * spikeLen);
+        ctx.strokeStyle = cBlue(s.hue, 80, 92, spikeA);
+        ctx.lineWidth   = 0.6;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(sx - Math.cos(sa) * flareR, sy - Math.sin(sa) * flareR);
+        ctx.lineTo(sx - Math.cos(sa) * spikeLen, sy - Math.sin(sa) * spikeLen);
+        ctx.stroke();
+      }
+    }
+
+    ctx.beginPath();
+    ctx.arc(sx, sy, flareR, 0, Math.PI * 2);
+    ctx.fillStyle = cBlue(s.hue, 65, 94, alpha);
+    ctx.fill();
+  }
+
+  // ── 4. CENTRAL PLASMA CORE — glowing orb + ripple corona ──────
+  // Core size breathes with bass. Corona sends wave-ripples outward —
+  // multiple concentric halos at different radii that oscillate.
+  const coreR   = 16 + smoothBass * 52 + smoothBeat * 32;
+  const coreWave = Math.sin(cosmosTime * 2.1) * 0.08;   // subtle size shimmer
+
+  // ── Corona ripple rings (drawn first, behind orb)
+  const CORONA_RINGS = 5;
+  for (let cr = 0; cr < CORONA_RINGS; cr++) {
+    const crT  = cr / CORONA_RINGS;                        // 0 inner → 1 outer
+    // Each corona ring oscillates at a slightly different rate → wave ripple
+    const crR  = coreR * (2.2 + crT * 4.5)
+               + Math.sin(cosmosTime * (1.8 - crT * 0.9) + cr * 1.1) * (8 + crT * 18)
+               + smoothBass * 30 * (1 - crT);
+    const crH  = 185 + crT * 25;                          // inner cyan → outer blue
+    const crA  = (1 - crT) * (0.22 + smoothBeat * 0.14) * (1 + coreWave);
+    ctx.beginPath(); ctx.arc(CX, CY, Math.max(1, crR), 0, Math.PI * 2);
+    ctx.strokeStyle = cBlue(crH, 85, 78, crA);
+    ctx.lineWidth   = 1.2 - crT * 0.7;
+    ctx.stroke();
+  }
+
+  // ── Radial corona gradient
+  const gCore = ctx.createRadialGradient(CX, CY, 0, CX, CY, coreR * 7.5);
+  gCore.addColorStop(0,    cBlue(195, 90, 96, 0.55 + smoothBeat * 0.35));
+  gCore.addColorStop(0.12, cBlue(192, 92, 78, 0.28 + smoothBass * 0.18));
+  gCore.addColorStop(0.35, cBlue(200, 80, 55, 0.10));
+  gCore.addColorStop(0.65, cBlue(210, 70, 35, 0.04));
+  gCore.addColorStop(1,    cBlue(215, 60, 20, 0));
+  ctx.fillStyle = gCore;
+  ctx.beginPath(); ctx.arc(CX, CY, coreR * 7.5, 0, Math.PI * 2); ctx.fill();
+
+  // ── Inner solid orb — icy highlight on top-left
+  ctx.beginPath(); ctx.arc(CX, CY, coreR * (1 + coreWave), 0, Math.PI * 2);
+  const gOrb = ctx.createRadialGradient(
+    CX - coreR * 0.35, CY - coreR * 0.35, 0,
+    CX, CY, coreR * (1 + coreWave)
+  );
+  gOrb.addColorStop(0,   cBlue(190, 35, 98, 0.96));
+  gOrb.addColorStop(0.45,cBlue(195, 88, 72, 0.88));
+  gOrb.addColorStop(0.8, cBlue(205, 95, 48, 0.75));
+  gOrb.addColorStop(1,   cBlue(212, 100, 30, 0.60));
+  ctx.fillStyle = gOrb; ctx.fill();
+
+  // ── 5. AURORA ARMS — 7 bezier tendrils on bar hit ─────────────
+  // Arms flow like fluid solar flares following wave arcs.
+  // Each arm is drawn twice: a thin bright core + a wide soft glow,
+  // both in icy-blue tones. Control points shift with cosmosTime to
+  // make the arms wave as they extend.
+  if (barFlash > 0.04) {
+    const ARM_COUNT = 7;
+    for (let i = 0; i < ARM_COUNT; i++) {
+      // Base angle rotates slowly — arms sweep like solar wind
+      const baseA   = (Math.PI * 2 / ARM_COUNT) * i + cosmosTime * 0.04;
+      const armLen  = (180 + smoothBass * 380 + smoothMid * 120) * barFlash;
+      // Arm hue steps gently across 185–215
+      const armH    = 185 + (i / ARM_COUNT) * 30;
+      const armAlpha = barFlash * 0.72;
+
+      // Wave-arc control points — cp1 curves one way, cp2 the other
+      // → produces the S-curve fluid tendril shape
+      const waveA  = Math.sin(cosmosTime * 0.9 + i * 0.8) * 0.45;
+      const cp1x = CX + Math.cos(baseA + waveA) * armLen * 0.35;
+      const cp1y = CY + Math.sin(baseA + waveA) * armLen * 0.35;
+      const cp2x = CX + Math.cos(baseA - waveA * 0.6) * armLen * 0.72;
+      const cp2y = CY + Math.sin(baseA - waveA * 0.6) * armLen * 0.72;
+      const ex   = CX + Math.cos(baseA) * armLen;
+      const ey   = CY + Math.sin(baseA) * armLen;
+
+      // Wide soft glow pass
+      ctx.beginPath(); ctx.moveTo(CX, CY);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey);
+      ctx.strokeStyle = cBlue(armH, 85, 65, armAlpha * 0.22);
+      ctx.lineWidth   = 18 * barFlash;
+      ctx.lineCap     = 'round';
+      ctx.stroke();
+
+      // Mid glow pass
+      ctx.beginPath(); ctx.moveTo(CX, CY);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey);
+      ctx.strokeStyle = cBlue(armH, 90, 80, armAlpha * 0.55);
+      ctx.lineWidth   = 5 * barFlash;
+      ctx.stroke();
+
+      // Bright thin core pass
+      ctx.beginPath(); ctx.moveTo(CX, CY);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey);
+      ctx.strokeStyle = cBlue(armH, 60, 96, armAlpha * 0.90);
+      ctx.lineWidth   = 1.2;
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';   // reset
+  }
+
+  // ── 6. BEAT SHOCKWAVE RINGS — 2 concentric expanding rings ────
+  // On each beat, spawn a ring. Rings expand smoothly and fade.
+  // Colour shifts between pale blue (195) and cyan (186) as they grow.
+  // We maintain a live pool so multiple rings can overlap mid-decay.
+  if (beatFlash > 0.92) {
+    // Spawn new ring on fresh beat (beatFlash starts at 1.0)
+    cosmosRings.push({ birth: cosmosTime, r: 0 });
+  }
+  // Draw + age all live rings
+  for (let ri = cosmosRings.length - 1; ri >= 0; ri--) {
+    const rg = cosmosRings[ri];
+    const age = cosmosTime - rg.birth;           // 0→∞ as it ages
+    const maxAge = 2.8;                          // ring lives ~2.8 cosmos-time units
+    if (age > maxAge) { cosmosRings.splice(ri, 1); continue; }
+
+    const life  = age / maxAge;                  // 0=new, 1=gone
+    const ringR = life * W * 0.58;               // expands to 58% of width
+    const ringR2= life * W * 0.38;               // inner ring, smaller
+    const rAlpha = (1 - life) * (1 - life);      // quadratic fade
+
+    // Outer ring: pale blue → cyan as it expands
+    const rH1 = 195 + life * 10;
+    ctx.beginPath(); ctx.arc(CX, CY, Math.max(1, ringR), 0, Math.PI * 2);
+    ctx.strokeStyle = cBlue(rH1, 85, 80, rAlpha * 0.65);
+    ctx.lineWidth   = (1 - life) * 3.5 + 0.4;
+    ctx.stroke();
+
+    // Inner ring: cyan, slightly offset timing
+    const rH2 = 186 + life * 20;
+    ctx.beginPath(); ctx.arc(CX, CY, Math.max(1, ringR2), 0, Math.PI * 2);
+    ctx.strokeStyle = cBlue(rH2, 90, 88, rAlpha * 0.45);
+    ctx.lineWidth   = (1 - life) * 2.0 + 0.3;
+    ctx.stroke();
+  }
+
+  // ── 7. PHRASE SUPERNOVA — organic wave-ripple full-canvas bloom ─
+  // Every 32 beats the canvas blooms with layered icy-blue light.
+  // Multiple radial passes at different radii create a wave-ripple
+  // effect rather than a single hard flash.
+  if (phraseFlash > 0.03) {
+    const pf = phraseFlash;
+    // 3 overlapping radial blooms at staggered radii — wave effect
+    const radii = [W * 0.35, W * 0.55, W * 0.75];
+    const hues  = [188, 198, 210];
+    const alphas= [0.38, 0.22, 0.12];
+    for (let nb = 0; nb < 3; nb++) {
+      const gr = ctx.createRadialGradient(CX, CY, 0, CX, CY, radii[nb]);
+      gr.addColorStop(0,    cBlue(hues[nb],      70, 90, pf * alphas[nb] * 1.4));
+      gr.addColorStop(0.30, cBlue(hues[nb],      80, 70, pf * alphas[nb]));
+      gr.addColorStop(0.65, cBlue(hues[nb] + 10, 75, 50, pf * alphas[nb] * 0.45));
+      gr.addColorStop(1,    cBlue(hues[nb] + 15, 60, 30, 0));
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, W, H);
+    }
+    // Hard white-icy centre flash on phrase 1
+    if (pf > 0.5) {
+      const gFlash = ctx.createRadialGradient(CX, CY, 0, CX, CY, 120);
+      gFlash.addColorStop(0,   cBlue(190, 30, 98, (pf - 0.5) * 1.2));
+      gFlash.addColorStop(0.5, cBlue(196, 70, 85, (pf - 0.5) * 0.5));
+      gFlash.addColorStop(1,   cBlue(200, 80, 60, 0));
+      ctx.fillStyle = gFlash;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════
+// MODE 7 — AURA: Webcam Pixel Visualizer (pure Canvas, zero deps)
+// No external libraries. Uses getUserMedia + 2D pixel analysis.
+// WHAT IT DOES:
+//   • Draws a live mirror-flipped webcam feed as a colourised layer
+//   • Pixel brightness drives per-column "flame" height bars
+//   • Motion diff between frames drives a glowing edge-detect overlay
+//   • Beat flash causes a radial bloom across the full frame
+//   • Waveform arc drawn around the centre from FFT / simulated data
+//   • Hue shifts slowly through purple → violet → magenta with beat
+// ═══════════════════════════════════════════════════════════════════
+
+let auraVideo    = null;   // hidden <video>
+let auraStream   = null;   // MediaStream
+let auraReady    = false;
+let auraLoading  = false;
+let auraError    = '';
+let auraTime     = 0;
+let auraHue      = 270;
+
+// Offscreen canvas for pixel analysis (smaller = faster)
+let auraOff      = null;
+let auraOffCtx   = null;
+const AURA_W     = 320;    // analysis resolution
+const AURA_H     = 180;
+
+// Previous frame pixel data for motion detection
+let auraPrevPx   = null;
+
+// Column bar heights (per horizontal slice of the frame)
+const AURA_COLS  = 80;
+const auraColH   = new Float32Array(AURA_COLS);  // smoothed heights
+
+// Beat burst particles
+const auraBursts = [];
+
+// ── Helpers ───────────────────────────────────────────────────────
+function aClr(h,s,l,a){ return `hsla(${h},${s}%,${l}%,${a})`; }
+function aHue(h,o=0)  { return (h+o+360)%360; }
+
+function spawnAuraBurst(x,y,h,n=10){
+  for(let i=0;i<n;i++){
+    const a=(Math.PI*2/n)*i+Math.random()*0.5;
+    const spd=2+Math.random()*6;
+    auraBursts.push({x,y,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,
+      r:2+Math.random()*5,life:1.0,hue:h+Math.random()*40-20});
+  }
+}
+
+// ── Init: called once on first entry to mode 7 ───────────────────
+async function initAura(){
+  if(auraLoading||auraReady) return;
+  auraLoading=true; auraError='';
+  try{
+    auraStream = await navigator.mediaDevices.getUserMedia(
+      {video:{width:640,height:360,facingMode:'user'},audio:false});
+    auraVideo  = document.createElement('video');
+    auraVideo.srcObject=auraStream; auraVideo.autoplay=true;
+    auraVideo.playsInline=true; auraVideo.muted=true;
+    auraVideo.style.cssText='position:fixed;opacity:0;pointer-events:none;width:1px;height:1px;top:0;left:0;';
+    document.body.appendChild(auraVideo);
+    await new Promise(r=>{auraVideo.onloadedmetadata=r;});
+    auraVideo.play();
+    // Offscreen analysis canvas
+    auraOff    = document.createElement('canvas');
+    auraOff.width=AURA_W; auraOff.height=AURA_H;
+    auraOffCtx = auraOff.getContext('2d',{willReadFrequently:true});
+    auraReady=true;
+  }catch(err){
+    auraError=err.message||String(err);
+  }
+  auraLoading=false;
+}
+
+// ── Main render ───────────────────────────────────────────────────
+function modeAura(){
+  if(!auraReady&&!auraLoading) initAura();
+
+  auraTime += 0.010;
+  auraHue   = 270 + Math.sin(auraTime*0.15)*40; // 230–310 purple family
+
+  // ── LOADING / ERROR ─────────────────────────────────────────────
+  if(!auraReady){
+    ctx.save();
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    if(auraError){
+      ctx.font='20px Courier New';
+      ctx.fillStyle=aClr(auraHue,70,70,0.7);
+      ctx.fillText('CAMERA UNAVAILABLE',CX,CY-30);
+      ctx.font='11px Courier New';
+      ctx.fillStyle=aClr(auraHue,50,55,0.45);
+      // Trim error to fit
+      ctx.fillText(auraError.slice(0,72),CX,CY+8);
+    } else {
+      // Animated loading ring
+      const ang = auraTime*2.5;
+      ctx.beginPath();
+      ctx.arc(CX,CY-50,50,ang,ang+Math.PI*1.5);
+      ctx.strokeStyle=aClr(auraHue,80,72,0.6);
+      ctx.lineWidth=2; ctx.stroke();
+      ctx.font='16px Courier New';
+      ctx.fillStyle=aClr(auraHue,70,72,0.6);
+      ctx.fillText('REQUESTING CAMERA',CX,CY+20);
+      ctx.font='10px Courier New';
+      ctx.fillStyle=aClr(auraHue,50,55,0.35);
+      ctx.fillText('ALLOW ACCESS IN BROWSER PROMPT',CX,CY+50);
+    }
+    ctx.restore();
+    return;
+  }
+
+  // ── GRAB FRAME & ANALYSE PIXELS ─────────────────────────────────
+  // Draw mirrored video onto small offscreen canvas for pixel read
+  auraOffCtx.save();
+  auraOffCtx.translate(AURA_W,0); auraOffCtx.scale(-1,1); // mirror flip
+  auraOffCtx.drawImage(auraVideo,0,0,AURA_W,AURA_H);
+  auraOffCtx.restore();
+
+  let pixels;
+  try{ pixels = auraOffCtx.getImageData(0,0,AURA_W,AURA_H).data; }
+  catch(e){ return; } // tainted canvas (cross-origin) guard
+
+  // ── LAYER 1: COLOURISED WEBCAM OVERLAY ──────────────────────────
+  // Draw the mirrored video directly onto main canvas, tinted purple
+  ctx.save();
+  ctx.translate(W,0); ctx.scale(-1,1); // mirror
+  ctx.globalAlpha = 0.18 + smoothBass*0.10;
+  ctx.drawImage(auraVideo,0,0,W,H);
+  ctx.restore();
+
+  // Colour tint overlay in hue
+  ctx.save();
+  ctx.globalAlpha = 0.22 + smoothBeat*0.15;
+  ctx.fillStyle   = aClr(auraHue,85,40,1);
+  ctx.globalCompositeOperation = 'hue';
+  ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+
+  // ── LAYER 2: BRIGHTNESS COLUMN BARS ─────────────────────────────
+  // For each of AURA_COLS columns, compute average brightness
+  // → draw a vertical bar whose height = brightness, from bottom up
+  const colW_src = AURA_W / AURA_COLS;
+  const barW     = W / AURA_COLS;
+
+  for(let c=0;c<AURA_COLS;c++){
+    const x0 = Math.floor(c * colW_src);
+    const x1 = Math.floor((c+1) * colW_src);
+    let sum=0, count=0;
+    // Sample every 4th row for speed
+    for(let row=0;row<AURA_H;row+=4){
+      for(let col=x0;col<x1;col++){
+        const idx=(row*AURA_W+col)*4;
+        const luma=(pixels[idx]*0.299+pixels[idx+1]*0.587+pixels[idx+2]*0.114)/255;
+        sum+=luma; count++;
+      }
+    }
+    const bright = count>0 ? sum/count : 0;
+    // Smooth the column height
+    auraColH[c] = lerp(auraColH[c], bright, 0.18);
+    const bh = auraColH[c] * H * 0.70 * (1+smoothBass*0.5+smoothBeat*0.3);
+
+    const barX   = c*barW;
+    const colHue = aHue(auraHue, (c/AURA_COLS)*60-30);
+    const alpha  = 0.10 + auraColH[c]*0.45 + smoothBeat*0.15;
+
+    // Gradient bar from bottom
+    const gBar = ctx.createLinearGradient(barX,H,barX,H-bh);
+    gBar.addColorStop(0, aClr(colHue,90,65,alpha));
+    gBar.addColorStop(0.5,aClr(aHue(colHue,15),85,72,alpha*0.7));
+    gBar.addColorStop(1, aClr(aHue(colHue,30),80,82,0));
+    ctx.fillStyle=gBar;
+    ctx.fillRect(barX,H-bh,barW-1,bh);
+  }
+
+  // ── LAYER 3: MOTION EDGE GLOW ────────────────────────────────────
+  // Compare current frame to previous → bright diffs = motion edges
+  // Draw as glowing dots on the main canvas
+  if(auraPrevPx && auraPrevPx.length===pixels.length){
+    ctx.save();
+    const stepX=Math.floor(AURA_W/90), stepY=Math.floor(AURA_H/50);
+    for(let row=0;row<AURA_H;row+=stepY){
+      for(let col=0;col<AURA_W;col+=stepX){
+        const idx=(row*AURA_W+col)*4;
+        const dr=Math.abs(pixels[idx]  -auraPrevPx[idx]);
+        const dg=Math.abs(pixels[idx+1]-auraPrevPx[idx+1]);
+        const db=Math.abs(pixels[idx+2]-auraPrevPx[idx+2]);
+        const diff=(dr+dg+db)/765; // 0-1
+        if(diff<0.04) continue;    // ignore static pixels
+
+        // Map pixel position to canvas
+        const px=(col/AURA_W)*W;
+        const py=(row/AURA_H)*H;
+        const dotR = 2 + diff*14 + smoothBeat*6;
+        const eHue  = aHue(auraHue, diff*80-40);
+
+        const gDot=ctx.createRadialGradient(px,py,0,px,py,dotR*2.5);
+        gDot.addColorStop(0,  aClr(eHue,90,90,diff*0.85+smoothBeat*0.3));
+        gDot.addColorStop(0.5,aClr(eHue,80,70,diff*0.35));
+        gDot.addColorStop(1,  aClr(eHue,70,55,0));
+        ctx.fillStyle=gDot;
+        ctx.beginPath(); ctx.arc(px,py,dotR*2.5,0,Math.PI*2); ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+  // Store current frame for next diff
+  auraPrevPx = new Uint8ClampedArray(pixels);
+
+  // ── LAYER 4: WAVEFORM ARC ────────────────────────────────────────
+  // Audio waveform bent into a circle. Uses real FFT if audio loaded.
+  const WV_R = 300 + smoothBass*80;
+  const WV_N = 160;
+  if(audioLoaded && audioPlaying && analyser){
+    analyser.getByteTimeDomainData(waveData);
+  }
+  ctx.save();
+  ctx.beginPath();
+  for(let i=0;i<=WV_N;i++){
+    const angle=(Math.PI*2/WV_N)*i - Math.PI/2;
+    let amp=0;
+    if(audioLoaded && audioPlaying && analyser){
+      const idx=Math.floor((i/WV_N)*waveData.length);
+      amp=((waveData[idx]||128)-128)/128;
+    } else {
+      amp=Math.sin(i*0.25+auraTime*3.5)*0.4*(0.5+smoothBass);
+    }
+    const r=WV_R+amp*(60+smoothBass*80);
+    const x=CX+Math.cos(angle)*r, y=CY+Math.sin(angle)*r;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle=aClr(auraHue,80,78,0.30+smoothBeat*0.25);
+  ctx.lineWidth=1.5+smoothBass*1.5; ctx.stroke();
+
+  // Inner arc (counter-phase)
+  ctx.beginPath();
+  for(let i=0;i<=WV_N;i++){
+    const angle=(Math.PI*2/WV_N)*i + Math.PI/2;
+    let amp=0;
+    if(audioLoaded && audioPlaying && analyser){
+      const idx=Math.floor((i/WV_N)*waveData.length);
+      amp=((waveData[idx]||128)-128)/128;
+    } else {
+      amp=Math.sin(i*0.20-auraTime*2.8)*0.30*(0.4+smoothMid);
+    }
+    const r=WV_R*0.72+amp*(40+smoothMid*55);
+    const x=CX+Math.cos(angle)*r, y=CY+Math.sin(angle)*r;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle=aClr(aHue(auraHue,30),75,70,0.16+smoothBeat*0.12);
+  ctx.lineWidth=0.8; ctx.stroke();
+  ctx.restore();
+
+  // ── LAYER 5: BEAT RADIAL BLOOM ───────────────────────────────────
+  if(beatFlash>0.05){
+    const gBeat=ctx.createRadialGradient(CX,CY,0,CX,CY,W*0.60);
+    gBeat.addColorStop(0,    aClr(auraHue,70,88,beatFlash*0.38));
+    gBeat.addColorStop(0.30, aClr(aHue(auraHue,20),80,65,beatFlash*0.15));
+    gBeat.addColorStop(0.65, aClr(aHue(auraHue,40),70,45,beatFlash*0.06));
+    gBeat.addColorStop(1,    aClr(auraHue,60,30,0));
+    ctx.fillStyle=gBeat; ctx.fillRect(0,0,W,H);
+
+    // Expanding ring
+    const ringR=(1-beatFlash)*W*0.55;
+    ctx.beginPath(); ctx.arc(CX,CY,Math.max(1,ringR),0,Math.PI*2);
+    ctx.strokeStyle=aClr(auraHue,85,85,beatFlash*0.60);
+    ctx.lineWidth=beatFlash*4; ctx.stroke();
+
+    // Spawn bursts around ring edge on strong beats
+    if(beatFlash>0.85){
+      for(let i=0;i<6;i++){
+        const a=(Math.PI*2/6)*i;
+        spawnAuraBurst(CX+Math.cos(a)*120,CY+Math.sin(a)*120,auraHue,6);
+      }
+    }
+  }
+
+  // ── LAYER 6: BAR FLASH — pulsing central orb ─────────────────────
+  if(barFlash>0.05){
+    const orbR=30+barFlash*120+smoothBass*60;
+    const gOrb=ctx.createRadialGradient(CX,CY,0,CX,CY,orbR);
+    gOrb.addColorStop(0,    aClr(auraHue,50,96,barFlash*0.80));
+    gOrb.addColorStop(0.4,  aClr(auraHue,80,70,barFlash*0.35));
+    gOrb.addColorStop(1,    aClr(aHue(auraHue,30),70,45,0));
+    ctx.fillStyle=gOrb;
+    ctx.beginPath(); ctx.arc(CX,CY,orbR,0,Math.PI*2); ctx.fill();
+  }
+
+  // ── LAYER 7: PHRASE BLOOM ────────────────────────────────────────
+  if(phraseFlash>0.03){
+    const gPh=ctx.createRadialGradient(CX,CY,0,CX,CY,W*0.70);
+    gPh.addColorStop(0,    aClr(auraHue,60,90,phraseFlash*0.45));
+    gPh.addColorStop(0.40, aClr(aHue(auraHue,25),72,65,phraseFlash*0.18));
+    gPh.addColorStop(1,    aClr(auraHue,55,35,0));
+    ctx.fillStyle=gPh; ctx.fillRect(0,0,W,H);
+  }
+
+  // ── BURST PARTICLES ──────────────────────────────────────────────
+  for(let bi=auraBursts.length-1;bi>=0;bi--){
+    const b=auraBursts[bi];
+    b.x+=b.vx; b.y+=b.vy; b.vx*=0.90; b.vy*=0.90;
+    b.life-=0.042;
+    if(b.life<=0){auraBursts.splice(bi,1);continue;}
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r*b.life,0,Math.PI*2);
+    ctx.fillStyle=aClr(b.hue,82,85,b.life*0.80);
+    ctx.fill();
+  }
+}
+
 function drawBackground() {
-  const trailAlpha=mode===5?0.60:mode===1?0.10:0.07;
+  const trailAlpha=mode===5?0.60:mode===1?0.10:mode===6?0.04:mode===7?0.05:0.07;
   ctx.globalAlpha=trailAlpha;
-  ctx.fillStyle=`hsl(${globalHue},40%,2%)`;
+  ctx.fillStyle=mode===6?`hsl(${cosmosHue},35%,1%)`:mode===7?'hsl(270,30%,2%)':`hsl(${globalHue},40%,2%)`;
   ctx.fillRect(0,0,W,H);
   ctx.globalAlpha=1;
 }
@@ -495,6 +1208,8 @@ function render(now) {
       case 3: modeHex();        break;
       case 4: modeMirror();     break;
       case 5: modeStrobeGrid(); break;
+      case 6: modeCosmos();     break;
+      case 7: modeAura();       break;
     }
     ctx.restore();
     drawVignette();
@@ -554,6 +1269,8 @@ document.addEventListener('keydown', e => {
   if(e.key==='1') setMode(0); if(e.key==='2') setMode(1);
   if(e.key==='3') setMode(2); if(e.key==='4') setMode(3);
   if(e.key==='5') setMode(4); if(e.key==='6') setMode(5);
+  if(e.key==='7') setMode(6);
+  if(e.key==='8') setMode(7);
   if(e.key==='ArrowRight') nudgeBpm(1);  if(e.key==='ArrowLeft')  nudgeBpm(-1);
   if(e.key==='ArrowUp')    nudgeBpm(5);  if(e.key==='ArrowDown')  nudgeBpm(-5);
   if(e.code==='Space') {
